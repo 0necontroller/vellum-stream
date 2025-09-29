@@ -35,7 +35,7 @@ app.use(helmet(helmetConfig));
 app.use(Borgen({}));
 app.use(express.json());
 app.use(cookieParser());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true, limit: "200mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
 // Initialize TUS server

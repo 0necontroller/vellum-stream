@@ -4,7 +4,9 @@ Vellum is a pluggable video processing server that can be easily integrated into
 
 ## 🚀 Features
 
-- **TUS Protocol Support**: Resumable file uploads for reliable video upload experience
+- **Dual Upload Methods**:
+  - **TUS Protocol**: Resumable uploads (max 100MB) for reliable upload experience
+  - **Direct Upload**: Fast multipart form uploads (max 200MB) for immediate processing
 - **FFmpeg Transcoding**: Automatic video transcoding to HLS streaming format
 - **S3 Compatible Storage**: Works with MinIO, AWS S3, or any S3-compatible storage
 - **Queue-based Processing**: RabbitMQ-powered background video processing
@@ -103,7 +105,7 @@ Authorization: Bearer your_secure_api_key_here
 
 #### 1. Create Upload Session
 
-Create a TUS upload session for a video file:
+Create an upload session for a video file with your preferred upload method:
 
 ```bash
 POST /api/v1/video/create
@@ -113,8 +115,10 @@ Authorization: Bearer your_secure_api_key_here
 {
   "filename": "my-video.mp4",
   "filesize": 104857600,
+  "type": "tus", // "tus" for resumable uploads (max 100MB) or "direct" for form uploads (max 200MB)
   "callbackUrl": "https://myapp.com/webhook", // optional
-  "s3Path": "/v2/media" // optional - custom S3 path for storing the video
+  "s3Path": "/v2/media", // optional - custom S3 path for storing the video
+  "uploadToS3": true // optional - also upload MP4 version to S3
 }
 ```
 
@@ -126,7 +130,23 @@ Response:
   "message": "Upload session created",
   "data": {
     "uploadId": "550e8400-e29b-41d4-a716-446655440000",
-    "uploadUrl": "http://localhost:8001/api/v1/tus/files/550e8400-e29b-41d4-a716-446655440000",
+    "uploadUrl": "http://localhost:8001/api/v1/tus/files/550e8400-e29b-41d4-a716-446655440000", // TUS endpoint for resumable uploads
+    "videoUrl": "http://localhost:9000/video-streams/v2/media/550e8400-e29b-41d4-a716-446655440000/index.m3u8",
+    "expiresIn": 3600,
+    "mp4Url": "http://localhost:9000/video-streams/v2/media/550e8400-e29b-41d4-a716-446655440000/video.mp4" // included if uploadToS3 is true
+  }
+}
+```
+
+**For Direct Uploads** (type: "direct"):
+
+```json
+{
+  "status": "success",
+  "message": "Upload session created",
+  "data": {
+    "uploadId": "550e8400-e29b-41d4-a716-446655440000",
+    "uploadUrl": "http://localhost:8001/api/v1/video/550e8400-e29b-41d4-a716-446655440000/upload", // Direct upload endpoint
     "videoUrl": "http://localhost:9000/video-streams/v2/media/550e8400-e29b-41d4-a716-446655440000/index.m3u8",
     "expiresIn": 3600
   }
@@ -136,15 +156,18 @@ Response:
 **Response Fields:**
 
 - `uploadId`: Unique identifier for the upload session
-- `uploadUrl`: TUS endpoint URL for uploading the video file
-- `videoUrl`: Future HLS streaming URL where the processed video will be available (constructed using s3Path if provided)
+- `uploadUrl`: Upload endpoint URL (TUS for resumable uploads or direct endpoint for form uploads)
+- `videoUrl`: Future HLS streaming URL where the processed video will be available
 - `expiresIn`: Upload session expiration time in seconds
+- `mp4Url`: Future MP4 file URL (only included if uploadToS3 is true)
 
 #### 2. Upload Video File
 
-Use the TUS protocol to upload your video file to the `uploadUrl` returned from the create session endpoint. You can use any TUS client library.
+Vellum supports two upload methods:
 
-JavaScript example using `tus-js-client`:
+##### Option A: TUS Resumable Upload (Recommended for large files)
+
+Use the TUS protocol for reliable, resumable uploads up to 100MB. Perfect for unstable network conditions:
 
 ```javascript
 import * as tus from "tus-js-client";
@@ -171,6 +194,49 @@ const upload = new tus.Upload(file, {
 
 upload.start();
 ```
+
+##### Option B: Direct Form Upload (Faster for smaller files)
+
+Use direct multipart form upload for immediate processing up to 200MB:
+
+```javascript
+// JavaScript example
+const formData = new FormData();
+formData.append("file", fileInput.files[0]);
+
+fetch(uploadUrl, {
+  // uploadUrl from create session response
+  method: "POST",
+  headers: {
+    Authorization: "Bearer your_secure_api_key_here",
+  },
+  body: formData,
+})
+  .then((response) => response.json())
+  .then((data) => {
+    console.log("Upload completed:", data);
+  })
+  .catch((error) => {
+    console.error("Upload failed:", error);
+  });
+```
+
+```bash
+# cURL example
+curl -X POST http://localhost:8001/api/v1/video/{uploadId}/upload \
+  -H "Authorization: Bearer your_secure_api_key_here" \
+  -F "file=@my-video.mp4"
+```
+
+**Upload Method Comparison:**
+
+| Feature           | TUS Upload                         | Direct Upload                     |
+| ----------------- | ---------------------------------- | --------------------------------- |
+| **Max File Size** | 100MB                              | 200MB                             |
+| **Resumable**     | ✅ Yes                             | ❌ No                             |
+| **Speed**         | Moderate                           | Fast                              |
+| **Reliability**   | High                               | Moderate                          |
+| **Best For**      | Unstable connections, larger files | Stable connections, quick uploads |
 
 #### 3. Check Video Status
 
@@ -217,6 +283,34 @@ GET /api/v1/video/{uploadId}/callback-status
 Authorization: Bearer your_secure_api_key_here
 ```
 
+### Additional Endpoints
+
+#### Direct File Upload
+
+For direct uploads, use this endpoint after creating a session with `type: "direct"`:
+
+```bash
+POST /api/v1/video/{uploadId}/upload
+Content-Type: multipart/form-data
+Authorization: Bearer your_secure_api_key_here
+
+# Form field: file (binary video file)
+```
+
+Response:
+
+```json
+{
+  "status": "success",
+  "message": "File uploaded successfully, processing started",
+  "data": {
+    "uploadId": "550e8400-e29b-41d4-a716-446655440000",
+    "filename": "my-video.mp4",
+    "status": "processing"
+  }
+}
+```
+
 ### Custom S3 Storage Paths
 
 You can specify a custom path within your S3 bucket where videos should be stored using the `s3Path` parameter when creating an upload session.
@@ -246,9 +340,21 @@ You can specify a custom path within your S3 bucket where videos should be store
 
 ## 🎬 Video Processing Workflow
 
-1. **Upload Session Creation**: Client creates upload session via API
-2. **TUS Upload**: Client uploads video file using TUS protocol
-3. **Queue Processing**: Video is queued for background processing
+### TUS Upload Workflow
+
+1. **Upload Session Creation**: Client creates upload session via API with `type: "tus"`
+2. **TUS Upload**: Client uploads video file using TUS protocol (resumable, max 100MB)
+3. **Queue Processing**: Video is queued for background processing upon upload completion
+4. **FFmpeg Transcoding**: Video is transcoded to HLS format
+5. **S3 Upload**: Processed segments uploaded to S3/MinIO
+6. **Webhook Notification**: Optional callback sent to your URL
+7. **Cleanup**: Original video file deleted from disk
+
+### Direct Upload Workflow
+
+1. **Upload Session Creation**: Client creates upload session via API with `type: "direct"`
+2. **Direct Upload**: Client uploads video file via multipart form (fast, max 200MB)
+3. **Immediate Processing**: Video is immediately queued for background processing
 4. **FFmpeg Transcoding**: Video is transcoded to HLS format
 5. **S3 Upload**: Processed segments uploaded to S3/MinIO
 6. **Webhook Notification**: Optional callback sent to your URL
@@ -293,7 +399,7 @@ npm run start  # Start production server
 | `SERVER_PORT`        | API server port            | `8001`                                    |
 | `NODE_ENV`           | Environment mode           | `dev`                                     |
 | `UPLOAD_PATH`        | Temporary upload directory | `./uploads`                               |
-| `MAX_FILE_SIZE`      | Maximum file size          | `100mb`                                   |
+| `MAX_FILE_SIZE`      | Maximum file size (TUS)    | `100mb`                                   |
 | `ALLOWED_FILE_TYPES` | Allowed MIME types         | `video/mp4,video/avi,video/mov,video/mkv` |
 | `S3_ACCESS_KEY`      | S3/MinIO access key        | `minioadmin`                              |
 | `S3_SECRET_KEY`      | S3/MinIO secret key        | `minioadmin`                              |
@@ -352,9 +458,22 @@ Interactive API docs available at: `http://localhost:8001/api/v1/docs`
 
 **Upload fails:**
 
-- Check TUS endpoint configuration
-- Verify file size limits
-- Check allowed file types
+- **TUS uploads**: Check TUS endpoint configuration, verify file size limits (100MB), ensure stable connection
+- **Direct uploads**: Check multipart form configuration, verify file size limits (200MB), ensure proper Content-Type headers
+- Verify file types are in allowed list
+- Check available disk space in upload directory
+
+**Upload type selection:**
+
+- **Use TUS** for: Unstable networks, files close to limits, need for resumability
+- **Use Direct** for: Fast networks, smaller files, immediate processing needs
+- **File size limits**: TUS (100MB), Direct (200MB)
+
+**Size limit errors:**
+
+- TUS uploads: "File size exceeds maximum allowed size (100MB)"
+- Direct uploads: "File size exceeds maximum allowed size for direct uploads (200MB)"
+- Check file size before creating upload session
 
 **Webhook callbacks fail:**
 
@@ -381,6 +500,33 @@ View all service logs:
 ```bash
 docker-compose logs -f
 ```
+
+## 📋 Quick Reference
+
+### Upload Type Comparison
+
+| Upload Type | Max Size | Method           | Resumable | Best For                            |
+| ----------- | -------- | ---------------- | --------- | ----------------------------------- |
+| **TUS**     | 100MB    | `type: "tus"`    | ✅ Yes    | Unstable connections, reliability   |
+| **Direct**  | 200MB    | `type: "direct"` | ❌ No     | Fast networks, immediate processing |
+
+### API Endpoints
+
+| Method | Endpoint                             | Description             |
+| ------ | ------------------------------------ | ----------------------- |
+| `POST` | `/api/v1/video/create`               | Create upload session   |
+| `POST` | `/api/v1/video/{id}/upload`          | Direct file upload      |
+| `GET`  | `/api/v1/video/{id}/status`          | Check processing status |
+| `GET`  | `/api/v1/video/{id}/callback-status` | Check webhook status    |
+| `GET`  | `/api/v1/videos`                     | List all videos         |
+| `POST` | `/api/v1/tus/files/{id}`             | TUS upload endpoint     |
+
+### Size Limits
+
+- **Express payload limit**: 200MB (JSON/form data)
+- **TUS uploads**: 100MB (configurable via `MAX_FILE_SIZE`)
+- **Direct uploads**: 200MB (hardcoded for optimal performance)
+- **Video processing**: No additional limits beyond upload constraints
 
 ## 🤝 Contributing
 

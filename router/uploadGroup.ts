@@ -4,6 +4,8 @@ import {
   getVideoStatus,
   listAllVideos,
   getCallbackStatus,
+  directUpload,
+  uploadDirect,
 } from "../controllers/video.Controller";
 import { authenticateBearer } from "../lib/auth";
 
@@ -17,5 +19,12 @@ router.post("/video/create", createVideoUpload);
 router.get("/video/:uploadId/status", getVideoStatus);
 router.get("/video/:uploadId/callback-status", getCallbackStatus);
 router.get("/videos", listAllVideos);
+
+// Direct upload endpoint
+router.post(
+  "/video/:uploadId/upload",
+  uploadDirect.single("file"),
+  directUpload
+);
 
 export default router;
