@@ -1,14 +1,19 @@
 import { Request, Response } from "express";
 import { v4 as uuidv4 } from "uuid";
+import multer from "multer";
+import path from "path";
+import fs from "fs";
 import {
   createVideoRecord,
   getVideoRecord,
   getAllVideos,
+  updateVideoRecord,
 } from "../lib/videoStore";
 import { IServerResponse } from "../types/response";
 import { ENV } from "../lib/environments";
 import { BUCKET_NAME } from "../lib/s3client";
 import { validateUpload, formatValidationErrors } from "../lib/validation";
+import { processVideoAsync } from "./utils/upload-utils";
 
 /**
  * @openapi
@@ -52,6 +57,12 @@ import { validateUpload, formatValidationErrors } from "../lib/validation";
  *           default: false
  *           description: Whether to upload an MP4 version of the video to S3 alongside HLS segments
  *           example: true
+ *         type:
+ *           type: string
+ *           enum: [direct, tus]
+ *           default: tus
+ *           description: Upload method - 'direct' for multipart form upload or 'tus' for resumable uploads
+ *           example: "tus"
  *     VideoUploadSessionResponse:
  *       type: object
  *       properties:
@@ -61,7 +72,7 @@ import { validateUpload, formatValidationErrors } from "../lib/validation";
  *           example: "550e8400-e29b-41d4-a716-446655440000"
  *         uploadUrl:
  *           type: string
- *           description: TUS upload URL for client-side uploads
+ *           description: Upload URL - TUS endpoint for resumable uploads or direct endpoint for form uploads
  *           example: "http://localhost:8001/api/v1/tus/files/550e8400-e29b-41d4-a716-446655440000"
  *         videoUrl:
  *           type: string
@@ -123,6 +134,11 @@ import { validateUpload, formatValidationErrors } from "../lib/validation";
  *           type: string
  *           description: S3 URL of the MP4 file (available when completed and uploadToS3 was true)
  *           example: "http://localhost:9000/video-streams/550e8400-e29b-41d4-a716-446655440000/video.mp4"
+ *         uploadType:
+ *           type: string
+ *           enum: [direct, tus]
+ *           description: Upload method used
+ *           example: "tus"
  */
 
 /**
@@ -130,7 +146,7 @@ import { validateUpload, formatValidationErrors } from "../lib/validation";
  * /api/v1/video/create:
  *   post:
  *     summary: Create a video upload session
- *     description: Creates a TUS upload session and returns a presigned URL for direct frontend uploads. Optionally converts and uploads MP4 version to S3.
+ *     description: Creates an upload session and returns an upload URL. Supports both TUS resumable uploads (max 100MB) and direct multipart form uploads (max 200MB). Optionally converts and uploads MP4 version to S3.
  *     tags: [Video]
  *     security:
  *       - BearerAuth: []
@@ -168,7 +184,7 @@ import { validateUpload, formatValidationErrors } from "../lib/validation";
  *                     status:
  *                       example: error
  *                     message:
- *                       example: File size (150MB) exceeds maximum allowed size (100MB)
+ *                       example: File size (150MB) exceeds maximum allowed size (100MB) for TUS uploads, or (200MB) for direct uploads
  *       422:
  *         description: Validation error for uploadToS3 parameter
  *         content:
@@ -208,6 +224,7 @@ export const createVideoUpload = async (
       callbackUrl,
       s3Path,
       uploadToS3 = false,
+      type = "tus",
     } = req.body;
 
     if (!filename || !filesize) {
@@ -220,7 +237,38 @@ export const createVideoUpload = async (
     }
 
     // Validate upload constraints (file size, type, and max files)
-    const validationResult = validateUpload(filename, filesize);
+    // For direct uploads, allow up to 200MB, otherwise use default validation
+    let validationResult;
+    if (type === "direct") {
+      // Custom validation for direct uploads with 200MB limit
+      const maxDirectUploadSize = 200 * 1024 * 1024; // 200MB in bytes
+      if (filesize > maxDirectUploadSize) {
+        const maxSizeMB = Math.round(maxDirectUploadSize / (1024 * 1024));
+        const fileSizeMB = Math.round(filesize / (1024 * 1024));
+        res.status(400).json({
+          status: "error",
+          message: `File size (${fileSizeMB}MB) exceeds maximum allowed size for direct uploads (${maxSizeMB}MB)`,
+          data: null,
+        });
+        return;
+      }
+      // Still validate file type and other constraints
+      validationResult = validateUpload(filename, filesize);
+      // Override file size validation result if it passed our custom check
+      if (!validationResult.isValid) {
+        // Filter out file size errors since we handled it above
+        const nonSizeErrors = validationResult.errors.filter(
+          (error) => !error.message.includes("File size")
+        );
+        if (nonSizeErrors.length === 0) {
+          validationResult = { isValid: true, errors: [] };
+        } else {
+          validationResult = { isValid: false, errors: nonSizeErrors };
+        }
+      }
+    } else {
+      validationResult = validateUpload(filename, filesize);
+    }
     if (!validationResult.isValid) {
       res.status(400).json({
         status: "error",
@@ -250,6 +298,16 @@ export const createVideoUpload = async (
       return;
     }
 
+    // Validate type parameter
+    if (type && !["direct", "tus"].includes(type)) {
+      res.status(400).json({
+        status: "error",
+        message: "type must be either 'direct' or 'tus'",
+        data: null,
+      });
+      return;
+    }
+
     // Clean up s3Path - remove leading/trailing slashes and ensure it's a valid path
     let cleanS3Path = s3Path;
     if (cleanS3Path) {
@@ -266,7 +324,10 @@ export const createVideoUpload = async (
     }
 
     const uploadId = uuidv4();
-    const uploadUrl = `${ENV.VELLUM_HOST}/api/v1/tus/files/${uploadId}`;
+    const uploadUrl =
+      type === "direct"
+        ? `${ENV.VELLUM_HOST}/api/v1/video/${uploadId}/upload`
+        : `${ENV.VELLUM_HOST}/api/v1/tus/files/${uploadId}`;
 
     createVideoRecord({
       id: uploadId,
@@ -276,6 +337,7 @@ export const createVideoUpload = async (
       callbackUrl,
       s3Path: cleanS3Path,
       uploadToS3,
+      uploadType: type,
     });
 
     // Construct the video URL using the same logic as in transcodeAndUpload
@@ -560,6 +622,259 @@ export const getCallbackStatus = async (
     res.status(500).json({
       status: "error",
       message: "Failed to get callback status",
+      data: null,
+    });
+  }
+};
+
+// Configure multer for file uploads
+export const uploadDirect = multer({
+  dest: path.join(process.cwd(), ENV.UPLOAD_PATH),
+  limits: {
+    fileSize: 200 * 1024 * 1024, // 200MB max file size
+  },
+  fileFilter: (req, file, cb) => {
+    // Accept video files
+    if (file.mimetype.startsWith("video/")) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only video files are allowed"));
+    }
+  },
+});
+
+/**
+ * @openapi
+ * /api/v1/video/{uploadId}/upload:
+ *   post:
+ *     summary: Direct file upload for a video session
+ *     description: Upload a video file directly using multipart/form-data for a pre-created upload session
+ *     tags: [Video]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: uploadId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: The video upload ID from the create session endpoint
+ *         example: "550e8400-e29b-41d4-a716-446655440000"
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - file
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *                 description: The video file to upload
+ *     responses:
+ *       200:
+ *         description: File uploaded successfully and processing started
+ *         content:
+ *           application/json:
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/ServerResponse'
+ *                 - type: object
+ *                   properties:
+ *                     status:
+ *                       example: success
+ *                     message:
+ *                       example: File uploaded successfully, processing started
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         uploadId:
+ *                           type: string
+ *                           example: "550e8400-e29b-41d4-a716-446655440000"
+ *                         filename:
+ *                           type: string
+ *                           example: "video.mp4"
+ *                         status:
+ *                           type: string
+ *                           example: "processing"
+ *       400:
+ *         description: Invalid request or file validation failed
+ *         content:
+ *           application/json:
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/ServerResponse'
+ *                 - type: object
+ *                   properties:
+ *                     status:
+ *                       example: error
+ *                     message:
+ *                       example: "No file uploaded or file validation failed"
+ *       401:
+ *         description: Unauthorized - Invalid or missing Bearer token
+ *       404:
+ *         description: Upload session not found or invalid
+ *       409:
+ *         description: Upload session is not in uploading state
+ */
+export const directUpload = async (
+  req: Request,
+  res: Response<IServerResponse>
+) => {
+  try {
+    const { uploadId } = req.params;
+    const file = req.file;
+
+    // Check if file was uploaded
+    if (!file) {
+      res.status(400).json({
+        status: "error",
+        message: "No file uploaded",
+        data: null,
+      });
+      return;
+    }
+
+    // Get the video record
+    const videoRecord = getVideoRecord(uploadId);
+    if (!videoRecord) {
+      // Clean up uploaded file if record doesn't exist
+      try {
+        fs.unlinkSync(file.path);
+      } catch (cleanupError) {
+        console.warn(`Failed to cleanup uploaded file: ${cleanupError}`);
+      }
+
+      res.status(404).json({
+        status: "error",
+        message: "Upload session not found",
+        data: null,
+      });
+      return;
+    }
+
+    // Validate that the record is in the correct state
+    if (videoRecord.status !== "uploading") {
+      // Clean up uploaded file if record is in wrong state
+      try {
+        fs.unlinkSync(file.path);
+      } catch (cleanupError) {
+        console.warn(`Failed to cleanup uploaded file: ${cleanupError}`);
+      }
+
+      res.status(409).json({
+        status: "error",
+        message: `Upload session is not in uploading state. Current status: ${videoRecord.status}`,
+        data: null,
+      });
+      return;
+    }
+
+    // Validate uploaded file against original constraints
+    const validationResult = validateUpload(
+      file.originalname || videoRecord.filename,
+      file.size
+    );
+    if (!validationResult.isValid) {
+      // Clean up uploaded file if validation fails
+      try {
+        fs.unlinkSync(file.path);
+      } catch (cleanupError) {
+        console.warn(`Failed to cleanup uploaded file: ${cleanupError}`);
+      }
+
+      res.status(400).json({
+        status: "error",
+        message: formatValidationErrors(validationResult.errors),
+        data: null,
+      });
+      return;
+    }
+
+    // Rename the file to match the expected uploadId naming scheme
+    const finalPath = path.join(path.dirname(file.path), uploadId);
+    try {
+      fs.renameSync(file.path, finalPath);
+    } catch (renameError) {
+      console.error(`Failed to rename uploaded file: ${renameError}`);
+      // Clean up the original file
+      try {
+        fs.unlinkSync(file.path);
+      } catch (cleanupError) {
+        console.warn(`Failed to cleanup uploaded file: ${cleanupError}`);
+      }
+
+      res.status(500).json({
+        status: "error",
+        message: "Failed to process uploaded file",
+        data: null,
+      });
+      return;
+    }
+
+    // Update video record progress to indicate upload is complete (ready for processing)
+    const updatedRecord = updateVideoRecord(uploadId, {
+      progress: 0, // Reset progress for processing stage
+      filename: file.originalname || videoRecord.filename, // Update with actual filename
+    });
+
+    if (!updatedRecord) {
+      // Clean up uploaded file if update fails
+      try {
+        fs.unlinkSync(finalPath);
+      } catch (cleanupError) {
+        console.warn(`Failed to cleanup uploaded file: ${cleanupError}`);
+      }
+
+      res.status(500).json({
+        status: "error",
+        message: "Failed to update upload session",
+        data: null,
+      });
+      return;
+    }
+
+    // Queue the video for processing
+    await processVideoAsync({
+      uploadId: uploadId,
+      filePath: finalPath,
+      filename: file.originalname || videoRecord.filename,
+      packager: "ffmpeg",
+      callbackUrl: videoRecord.callbackUrl,
+      s3Path: videoRecord.s3Path,
+      uploadToS3: videoRecord.uploadToS3,
+    });
+
+    console.log(
+      `✅ Direct upload completed and video queued for processing: ${uploadId}`
+    );
+
+    res.json({
+      status: "success",
+      message: "File uploaded successfully, processing started",
+      data: {
+        uploadId,
+        filename: file.originalname || videoRecord.filename,
+        status: "processing",
+      },
+    });
+  } catch (error) {
+    console.error("Error in direct upload:", error);
+
+    // Clean up uploaded file if it exists
+    if (req.file) {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (cleanupError) {
+        console.warn(`Failed to cleanup uploaded file: ${cleanupError}`);
+      }
+    }
+
+    res.status(500).json({
+      status: "error",
+      message: "Failed to process file upload",
       data: null,
     });
   }

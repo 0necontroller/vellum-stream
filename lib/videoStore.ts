@@ -20,6 +20,7 @@ export interface VideoRecord {
   s3Path?: string; // Custom S3 path for storing the video
   uploadToS3?: boolean; // Flag to upload MP4 file to S3
   mp4Url?: string; // S3 URL of the MP4 file
+  uploadType?: "direct" | "tus"; // Upload type
 }
 
 // Initialize SQLite database
@@ -82,6 +83,13 @@ try {
   // Column already exists, ignore error
 }
 
+// Add uploadType column if it doesn't exist (for existing databases)
+try {
+  db.exec(`ALTER TABLE videos ADD COLUMN uploadType TEXT DEFAULT 'tus'`);
+} catch (error) {
+  // Column already exists, ignore error
+}
+
 export const createVideoRecord = (data: Partial<VideoRecord>): VideoRecord => {
   const record: VideoRecord = {
     id: data.id as string,
@@ -97,8 +105,8 @@ export const createVideoRecord = (data: Partial<VideoRecord>): VideoRecord => {
   const stmt = db.prepare(`
     INSERT INTO videos (
       id, filename, status, progress, streamUrl, thumbnailUrl, createdAt, completedAt, 
-      error, packager, callbackUrl, callbackStatus, callbackRetryCount, callbackLastAttempt, s3Path, uploadToS3, mp4Url
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      error, packager, callbackUrl, callbackStatus, callbackRetryCount, callbackLastAttempt, s3Path, uploadToS3, mp4Url, uploadType
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   stmt.run(
@@ -118,7 +126,8 @@ export const createVideoRecord = (data: Partial<VideoRecord>): VideoRecord => {
     record.callbackLastAttempt?.toISOString() || null,
     record.s3Path || null,
     record.uploadToS3 ? 1 : 0,
-    record.mp4Url || null
+    record.mp4Url || null,
+    record.uploadType || "tus"
   );
 
   return record;
@@ -141,7 +150,7 @@ export const updateVideoRecord = (
     SET filename = ?, status = ?, progress = ?, streamUrl = ?, thumbnailUrl = ?, 
         completedAt = ?, error = ?, packager = ?, callbackUrl = ?,
         callbackStatus = ?, callbackRetryCount = ?, callbackLastAttempt = ?, s3Path = ?, 
-        uploadToS3 = ?, mp4Url = ?
+        uploadToS3 = ?, mp4Url = ?, uploadType = ?
     WHERE id = ?
   `);
 
@@ -161,6 +170,7 @@ export const updateVideoRecord = (
     updatedRecord.s3Path || null,
     updatedRecord.uploadToS3 ? 1 : 0,
     updatedRecord.mp4Url || null,
+    updatedRecord.uploadType || "tus",
     id
   );
 
@@ -219,6 +229,7 @@ export const getVideoRecord = (id: string): VideoRecord | undefined => {
       ? new Date(row.callbackLastAttempt)
       : undefined,
     uploadToS3: row.uploadToS3 === 1,
+    uploadType: row.uploadType || "tus",
   };
 };
 
@@ -234,6 +245,7 @@ export const getAllVideos = (): VideoRecord[] => {
       ? new Date(row.callbackLastAttempt)
       : undefined,
     uploadToS3: row.uploadToS3 === 1,
+    uploadType: row.uploadType || "tus",
   }));
 };
 
@@ -263,5 +275,6 @@ export const getVideosWithPendingCallbacks = (): VideoRecord[] => {
       ? new Date(row.callbackLastAttempt)
       : undefined,
     uploadToS3: row.uploadToS3 === 1,
+    uploadType: row.uploadType || "tus",
   }));
 };
