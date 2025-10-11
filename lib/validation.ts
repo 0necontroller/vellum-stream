@@ -1,5 +1,5 @@
-import { ENV } from "./environments";
 import mime from "mime-types";
+import { ENV } from "./environments";
 
 export interface ValidationError {
   field: string;

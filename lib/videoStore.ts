@@ -1,6 +1,6 @@
-import Database from "better-sqlite3";
-import path from "path";
 import fs from "fs";
+import path from "path";
+import Database from "better-sqlite3";
 
 export interface VideoRecord {
   id: string;
@@ -104,7 +104,7 @@ export const createVideoRecord = (data: Partial<VideoRecord>): VideoRecord => {
 
   const stmt = db.prepare(`
     INSERT INTO videos (
-      id, filename, status, progress, streamUrl, thumbnailUrl, createdAt, completedAt, 
+      id, filename, status, progress, streamUrl, thumbnailUrl, createdAt, completedAt,
       error, packager, callbackUrl, callbackStatus, callbackRetryCount, callbackLastAttempt, s3Path, uploadToS3, mp4Url, uploadType
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
@@ -146,10 +146,10 @@ export const updateVideoRecord = (
   }
 
   const stmt = db.prepare(`
-    UPDATE videos 
-    SET filename = ?, status = ?, progress = ?, streamUrl = ?, thumbnailUrl = ?, 
+    UPDATE videos
+    SET filename = ?, status = ?, progress = ?, streamUrl = ?, thumbnailUrl = ?,
         completedAt = ?, error = ?, packager = ?, callbackUrl = ?,
-        callbackStatus = ?, callbackRetryCount = ?, callbackLastAttempt = ?, s3Path = ?, 
+        callbackStatus = ?, callbackRetryCount = ?, callbackLastAttempt = ?, s3Path = ?,
         uploadToS3 = ?, mp4Url = ?, uploadType = ?
     WHERE id = ?
   `);
@@ -199,7 +199,7 @@ export const safelyTransitionToProcessing = (
 
   // Allow transition from uploading, failed, or processing with low progress
   const stmt = db.prepare(`
-    UPDATE videos 
+    UPDATE videos
     SET status = 'processing', progress = 10
     WHERE id = ? AND (status = 'uploading' OR status = 'failed' OR (status = 'processing' AND progress <= 10))
   `);
@@ -258,9 +258,9 @@ export const deleteVideoRecord = (id: string): boolean => {
 // Get videos with pending callbacks for cron job processing
 export const getVideosWithPendingCallbacks = (): VideoRecord[] => {
   const stmt = db.prepare(`
-    SELECT * FROM videos 
-    WHERE callbackUrl IS NOT NULL 
-    AND callbackStatus = 'pending' 
+    SELECT * FROM videos
+    WHERE callbackUrl IS NOT NULL
+    AND callbackStatus = 'pending'
     AND callbackRetryCount < 4
     AND status = 'completed'
     ORDER BY createdAt ASC

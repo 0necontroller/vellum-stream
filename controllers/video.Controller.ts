@@ -1,19 +1,19 @@
-import { Request, Response } from "express";
-import { v4 as uuidv4 } from "uuid";
-import multer from "multer";
-import path from "path";
-import fs from "fs";
 import {
   createVideoRecord,
   getVideoRecord,
   getAllVideos,
   updateVideoRecord,
 } from "../lib/videoStore";
-import { IServerResponse } from "../types/response";
+import fs from "fs";
+import path from "path";
+import multer from "multer";
+import { v4 as uuidv4 } from "uuid";
 import { ENV } from "../lib/environments";
+import { Request, Response } from "express";
 import { BUCKET_NAME } from "../lib/s3client";
-import { validateUpload, formatValidationErrors } from "../lib/validation";
+import { IServerResponse } from "../types/response";
 import { processVideoAsync } from "./utils/upload-utils";
+import { validateUpload, formatValidationErrors } from "../lib/validation";
 
 /**
  * @openapi
@@ -240,7 +240,6 @@ export const createVideoUpload = async (
     // For direct uploads, allow up to 200MB, otherwise use default validation
     let validationResult;
     if (type === "direct") {
-      // Custom validation for direct uploads with 200MB limit
       const maxDirectUploadSize = 200 * 1024 * 1024; // 200MB in bytes
       if (filesize > maxDirectUploadSize) {
         const maxSizeMB = Math.round(maxDirectUploadSize / (1024 * 1024));
@@ -252,7 +251,6 @@ export const createVideoUpload = async (
         });
         return;
       }
-      // Still validate file type and other constraints
       validationResult = validateUpload(filename, filesize);
       // Override file size validation result if it passed our custom check
       if (!validationResult.isValid) {
@@ -278,7 +276,6 @@ export const createVideoUpload = async (
       return;
     }
 
-    // Validate s3Path format if provided
     if (s3Path && typeof s3Path !== "string") {
       res.status(400).json({
         status: "error",
@@ -288,7 +285,6 @@ export const createVideoUpload = async (
       return;
     }
 
-    // Validate uploadToS3 parameter if provided
     if (uploadToS3 !== undefined && typeof uploadToS3 !== "boolean") {
       res.status(400).json({
         status: "error",
@@ -298,7 +294,6 @@ export const createVideoUpload = async (
       return;
     }
 
-    // Validate type parameter
     if (type && !["direct", "tus"].includes(type)) {
       res.status(400).json({
         status: "error",
@@ -308,7 +303,7 @@ export const createVideoUpload = async (
       return;
     }
 
-    // Clean up s3Path - remove leading/trailing slashes and ensure it's a valid path
+    // remove leading/trailing slashes and ensure it's a valid s3 path
     let cleanS3Path = s3Path;
     if (cleanS3Path) {
       cleanS3Path = cleanS3Path.trim();
@@ -340,13 +335,11 @@ export const createVideoUpload = async (
       uploadType: type,
     });
 
-    // Construct the video URL using the same logic as in transcodeAndUpload
     const s3Prefix = cleanS3Path
       ? `${cleanS3Path.replace(/^\/|\/$/g, "")}/${uploadId}`
       : uploadId;
     const videoUrl = `${BUCKET_NAME}.${ENV.S3_ENDPOINT}/${s3Prefix}/index.m3u8`;
 
-    // Construct MP4 URL if uploadToS3 is enabled
     const mp4Url = uploadToS3
       ? `${BUCKET_NAME}.${ENV.S3_ENDPOINT}/${s3Prefix}/video.mp4`
       : undefined;
@@ -799,7 +792,7 @@ export const directUpload = async (
       fs.renameSync(file.path, finalPath);
     } catch (renameError) {
       console.error(`Failed to rename uploaded file: ${renameError}`);
-      // Clean up the original file
+
       try {
         fs.unlinkSync(file.path);
       } catch (cleanupError) {
@@ -814,14 +807,12 @@ export const directUpload = async (
       return;
     }
 
-    // Update video record progress to indicate upload is complete (ready for processing)
     const updatedRecord = updateVideoRecord(uploadId, {
       progress: 0, // Reset progress for processing stage
       filename: file.originalname || videoRecord.filename, // Update with actual filename
     });
 
     if (!updatedRecord) {
-      // Clean up uploaded file if update fails
       try {
         fs.unlinkSync(finalPath);
       } catch (cleanupError) {
@@ -846,10 +837,6 @@ export const directUpload = async (
       s3Path: videoRecord.s3Path,
       uploadToS3: videoRecord.uploadToS3,
     });
-
-    console.log(
-      `✅ Direct upload completed and video queued for processing: ${uploadId}`
-    );
 
     res.json({
       status: "success",

@@ -3,10 +3,16 @@ import {
   DeleteObjectCommand,
   GetObjectCommand,
 } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { ENV } from "./environments";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
-// Initialize S3 client with MinIO configuration
+const STREAMING_CONTENT_TYPES = {
+  M3U8: "application/vnd.apple.mpegurl",
+  TS: "video/MP2T",
+};
+
+const BUCKET_NAME = ENV.S3_BUCKET;
+
 const s3Client = new S3Client({
   region: ENV.S3_REGION,
   endpoint: ENV.S3_ENDPOINT,
@@ -17,8 +23,6 @@ const s3Client = new S3Client({
   forcePathStyle: true,
 });
 
-// Bucket name from ENV
-const BUCKET_NAME = ENV.S3_BUCKET;
 
 /**
  * Deletes a file from MinIO
@@ -61,7 +65,7 @@ export const getPresignedUrl = async (
       expiresIn,
     });
 
-    return signedUrl; // Return the directly generated URL
+    return signedUrl;
   } catch (error) {
     console.error("Error generating presigned URL:", error);
     throw new Error("Failed to generate file access URL");
@@ -73,8 +77,7 @@ export const getPresignedUrl = async (
  */
 export const ensureBucketExists = async (): Promise<void> => {
   try {
-    // Implementation removed for simplicity - S3 SDK handles this differently
-    // In a production app, you'd want to check if bucket exists and create if not
+    // TODO - Implement bucket existence check and creation if needed
     console.log(`Ensuring bucket ${BUCKET_NAME} exists in MinIO`);
   } catch (error) {
     console.error("Error ensuring bucket exists:", error);
@@ -84,11 +87,5 @@ export const ensureBucketExists = async (): Promise<void> => {
 // Ensure the bucket exists when this module is imported
 ensureBucketExists();
 
-// Add streaming content types
-const STREAMING_CONTENT_TYPES = {
-  M3U8: "application/vnd.apple.mpegurl",
-  TS: "video/MP2T",
-};
 
-// Update exports to include content types
 export { s3Client, BUCKET_NAME, STREAMING_CONTENT_TYPES };
