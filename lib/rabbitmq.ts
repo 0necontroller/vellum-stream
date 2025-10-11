@@ -25,16 +25,16 @@ async function connectWithRetry(
           handshakeTimeout: 30000,
         }
       );
-      console.log("✅ Connected to RabbitMQ");
+      console.log("CONNECTED to RabbitMQ");
       return conn;
     } catch (err) {
       console.warn(
-        `⚠️ RabbitMQ not ready, retrying in ${delay}ms... (${i + 1}/${retries})`
+        `RabbitMQ NOT READY, retrying in ${delay}ms... (${i + 1}/${retries})`
       );
       await new Promise((res) => setTimeout(res, delay));
     }
   }
-  throw new Error("❌ Failed to connect to RabbitMQ after multiple attempts");
+  throw new Error("FAILED to connect to RabbitMQ after multiple attempts");
 }
 
 /**
@@ -46,13 +46,13 @@ export const initRabbitMQ = async (): Promise<void> => {
 
     // Add connection error handlers
     connection.on("error", (err) => {
-      console.error("❌ RabbitMQ connection error:", err.message);
+      console.error("RabbitMQ connection error:", err.message);
       // Set channel to null so we know we need to reconnect
       channel = null;
     });
 
     connection.on("close", () => {
-      console.warn("⚠️ RabbitMQ connection closed. Attempting to reconnect...");
+      console.warn("RabbitMQ connection closed. Attempting to reconnect...");
       channel = null;
       // Attempt to reconnect after a delay
       setTimeout(() => {
@@ -66,14 +66,14 @@ export const initRabbitMQ = async (): Promise<void> => {
 
     // Add channel error handlers
     channel.on("error", (err) => {
-      console.error("❌ RabbitMQ channel error:", err.message);
+      console.error("RabbitMQ CHANNEL ERROR:", err.message);
     });
 
     channel.on("close", () => {
-      console.warn("⚠️ RabbitMQ channel closed");
+      console.warn("RabbitMQ channel closed");
     });
 
-    console.log("✅ RabbitMQ connected successfully");
+    console.log("RabbitMQ CONNECTED successfully");
 
     // Start video processing worker
     if (channel) {
@@ -102,7 +102,7 @@ export const publishToQueue = async (
 ): Promise<void> => {
   if (!channel) {
     console.error(
-      "❌ RabbitMQ channel is not initialized. Attempting to reconnect..."
+      "RabbitMQ channel is NOT INITIALIZED. Attempting to reconnect..."
     );
     // Try to reconnect
     await initRabbitMQ();
@@ -118,7 +118,6 @@ export const publishToQueue = async (
     channel.sendToQueue(queueName, Buffer.from(JSON.stringify(message)), {
       persistent: true,
     });
-    console.log(`✅ Message sent to queue ${queueName}`);
   } catch (error) {
     console.error("Failed to publish message to RabbitMQ:", error);
     // Set channel to null to trigger reconnection on next attempt

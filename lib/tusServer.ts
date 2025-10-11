@@ -1,8 +1,8 @@
-import { Server } from "@tus/server";
-import { FileStore } from "@tus/file-store";
 import path from "path";
-import { publishToQueue, RabbitMQQueues } from "./rabbitmq";
+import { Server } from "@tus/server";
 import { ENV } from "./environments";
+import { FileStore } from "@tus/file-store";
+import { publishToQueue, RabbitMQQueues } from "./rabbitmq";
 import { updateVideoRecord, getVideoRecord } from "./videoStore";
 import { validateUpload, formatValidationErrors } from "./validation";
 
@@ -23,7 +23,7 @@ export const createTusServer = () => {
       // Double-check the record still exists
       const videoRecord = getVideoRecord(uploadId!);
       if (!videoRecord) {
-        console.error(`❌ Video record disappeared during upload: ${uploadId}`);
+        console.error(`Video record disappeared during upload: ${uploadId}`);
         return {};
       }
 
@@ -33,7 +33,7 @@ export const createTusServer = () => {
       });
 
       if (!updatedRecord) {
-        console.error(`❌ Failed to update video record: ${uploadId}`);
+        console.error(`Failed to update video record: ${uploadId}`);
         return {};
       }
 
@@ -48,7 +48,7 @@ export const createTusServer = () => {
         uploadToS3: videoRecord.uploadToS3,
       });
 
-      console.log(`✅ Video queued for processing: ${uploadId}`);
+      console.log(`VIDEO QUEUED for processing: ${uploadId}`);
       return {};
     },
     onUploadCreate: async (req, upload) => {
@@ -60,7 +60,7 @@ export const createTusServer = () => {
       // Check if video record exists
       const videoRecord = getVideoRecord(uploadId!);
       if (!videoRecord) {
-        console.error(`❌ No video record found for upload ID: ${uploadId}`);
+        console.error(`No video record found for upload ID: ${uploadId}`);
         throw new Error(
           `Video record not found. Please create video record first using POST /api/v1/video/create`
         );
@@ -69,7 +69,7 @@ export const createTusServer = () => {
       // Validate that the record is in the correct state
       if (videoRecord.status !== "uploading") {
         console.error(
-          `❌ Invalid video record status: ${videoRecord.status} for upload ID: ${uploadId}`
+          `Invalid video record status: ${videoRecord.status} for upload ID: ${uploadId}`
         );
         throw new Error(
           `Video record is not in uploading state. Current status: ${videoRecord.status}`
@@ -85,7 +85,7 @@ export const createTusServer = () => {
         );
         if (!validationResult.isValid) {
           console.error(
-            `❌ TUS upload validation failed: ${formatValidationErrors(
+            ` TUS upload VALIDATION FAILED: ${formatValidationErrors(
               validationResult.errors
             )}`
           );
@@ -97,7 +97,7 @@ export const createTusServer = () => {
         }
       }
 
-      console.log(`✅ Upload validated for ${uploadId}`);
+      console.log(`Upload validated for ${uploadId}`);
       return {};
     },
   });
