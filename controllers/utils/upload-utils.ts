@@ -190,13 +190,12 @@ export async function transcodeAndUpload(
     }
       - Audio: ${codecInfo.audioCodec}
       - Container: ${codecInfo.containerFormat}
-      - HLS Compatible: ${codecInfo.isHlsCompatible ? "COMPATIBLE" : "IN-COMPATIBLE"}
+      - HLS Compatible: ${
+        codecInfo.isHlsCompatible ? "COMPATIBLE" : "IN-COMPATIBLE"
+      }
       - Strategy: ${codecInfo.recommendedStrategy.toUpperCase()}`);
   } catch (error) {
-    console.warn(
-      "Failed to probe codecs, falling back to re-encode:",
-      error
-    );
+    console.warn("Failed to probe codecs, falling back to re-encode:", error);
     codecInfo = {
       videoCodec: "unknown",
       audioCodec: "unknown",
@@ -296,9 +295,7 @@ export async function transcodeAndUpload(
       codecInfo?.recommendedStrategy === "copy" ||
       codecInfo?.recommendedStrategy === "selective"
     ) {
-      console.log(
-        "Stream copy failed, attempting fallback to re-encoding..."
-      );
+      console.log("Stream copy failed, attempting fallback to re-encoding...");
       try {
         const fallbackCmd = buildOptimizedFFmpegCommand(
           "reencode",
@@ -579,9 +576,9 @@ async function probeVideoCodecs(filePath: string): Promise<VideoCodecInfo> {
 
 /**
  * Determines if video/audio codecs are compatible with HLS
-*  @param videoCodec - Video codec (e.g., 'h264')
-*  @param audioCodec - Audio codec (e.g., 'aac')
-*  @param videoProfile - Video profile (e.g., 'main', 'high')
+ *  @param videoCodec - Video codec (e.g., 'h264')
+ *  @param audioCodec - Audio codec (e.g., 'aac')
+ *  @param videoProfile - Video profile (e.g., 'main', 'high')
  */
 function isCompatibleWithHls(
   videoCodec: string,
@@ -608,22 +605,8 @@ function determineTranscodingStrategy(
   audioCodec: string,
   videoProfile?: string
 ): "copy" | "selective" | "reencode" {
-  const isVideoH264Compatible =
-    videoCodec === "h264" &&
-    (!videoProfile ||
-      ["baseline", "main", "high", "constrained baseline"].includes(
-        videoProfile.toLowerCase()
-      ));
-
-  const isAudioAacCompatible = audioCodec === "aac";
-
-  if (isVideoH264Compatible && isAudioAacCompatible) {
-    return "copy"; // Full stream copy
-  } else if (isVideoH264Compatible && !isAudioAacCompatible) {
-    return "selective"; // Copy video, re-encode audio
-  } else {
-    return "reencode"; // Re-encode both video and audio
-  }
+  // Always re-encode so segments are consistently sized and capped at 480p
+  return "reencode";
 }
 
 /**
@@ -651,8 +634,8 @@ function buildOptimizedFFmpegCommand(
 
     case "reencode":
     default:
-      // Full re-encode with optimized settings
-      return `ffmpeg -i "${inputPath}" -c:v libx264 -preset medium -crf 23 -c:a aac -b:a 128k ${baseParams} "${outputPath}"`;
+      // Full re-encode with 480p cap and bounded bitrate for smaller segments
+      return `ffmpeg -i "${inputPath}" -vf "scale=-2:480" -c:v libx264 -preset medium -crf 23 -maxrate 1200k -bufsize 2400k -c:a aac -b:a 128k ${baseParams} "${outputPath}"`;
   }
 }
 
@@ -694,7 +677,7 @@ async function convertToMp4(
     console.log(`Converting video to MP4: ${inputPath} -> ${outputPath}`);
 
     // Use FFmpeg with optimized settings for web playback
-    const cmd = `ffmpeg -i "${inputPath}" -c:v libx264 -preset medium -crf 23 -c:a aac -b:a 128k -movflags +faststart -y "${outputPath}"`;
+    const cmd = `ffmpeg -i "${inputPath}" -vf "scale=-2:480" -c:v libx264 -preset medium -crf 23 -maxrate 1200k -bufsize 2400k -c:a aac -b:a 128k -movflags +faststart -y "${outputPath}"`;
 
     console.log(`Executing MP4 conversion command: ${cmd}`);
     execSync(cmd, { stdio: "inherit" });
